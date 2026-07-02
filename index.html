@@ -3,198 +3,279 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hamviro - Private Studio Control</title>
+    <title>Hamviro - Private Studio Control (Firebase + ImgBB ZIP Upload)</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght=600;700;800&family=Inter:wght=400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // Aapki Live Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyCTyXa4Mih1upKkU_RKEp2M1nkUp1hi82g",
+            authDomain: "hamviro-online.firebaseapp.com",
+            projectId: "hamviro-online",
+            storageBucket: "hamviro-online.firebasestorage.app",
+            messagingSenderId: "477154267646",
+            appId: "1:477154267646:web:4936546332a796aa64b0af"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const productsRef = collection(db, "products");
+
+        // Aapki Live ImgBB API Key (Set ho chuki hai!)
+        const IMGBB_API_KEY = "a1734073279f85e1bef6a31a06627fdf";
+
+        let STAGED_FILES_PERMANENT = [];
+
+        // Handle ZIP File Selection & Tezi se ImgBB par Uploading
+        document.getElementById("admImgFileBulk").addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const statusBox = document.getElementById("zipStatusBox");
+            statusBox.className = "status-box info";
+            statusBox.style.display = "block";
+            statusBox.innerText = "⏳ Processing ZIP file & uploading to ImgBB...";
+
+            try {
+                const zip = await JSZip.loadAsync(file);
+                STAGED_FILES_PERMANENT = [];
+                
+                const filePromises = [];
+                
+                // ZIP ke andar se images nikalna
+                zip.forEach((relativePath, zipEntry) => {
+                    if (!zipEntry.dir && /\.(jfif|jpeg|jpg|png|webp|gif)$/i.test(zipEntry.name)) {
+                        const promise = zipEntry.async("blob").then(async (blob) => {
+                            // Blob ko Base64 me convert karna jo ImgBB ko chahiye
+                            return new Promise((resolve, reject) => {
+                                const reader = new FileReader();
+                                reader.onloadend = async () => {
+                                    const base64Data = reader.result.split(',')[1];
+                                    
+                                    const formData = new FormData();
+                                    formData.append("image", base64Data);
+
+                                    try {
+                                        const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+                                            method: "POST",
+                                            body: formData
+                                        });
+                                        const result = await response.json();
+                                        
+                                        if (result.success) {
+                                            STAGED_FILES_PERMANENT.push(result.data.url); // Permanent Online URL!
+                                            resolve();
+                                        } else {
+                                            reject(result.error);
+                                        }
+                                    } catch (err) {
+                                        reject(err);
+                                    }
+                                };
+                                reader.onerror = reject;
+                                reader.readAsDataURL(blob);
+                            });
+                        });
+                        filePromises.push(promise);
+                    }
+                });
+
+                // Jab saari images upload ho jayein
+                await Promise.all(filePromises);
+                statusBox.className = "status-box success";
+                statusBox.innerText = `✅ Success: ${STAGED_FILES_PERMANENT.length} Permanent URLs extracted via ImgBB!`;
+            } catch (err) {
+                console.error(err);
+                statusBox.className = "status-box error";
+                statusBox.innerText = "❌ Upload failed. Please check your network or ZIP file.";
+            }
+        });
+
+        // UI Form Submission for adding product to Firebase
+        document.getElementById("adminForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const submitBtn = document.getElementById("submitBtn");
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = "<i class='fa-solid fa-spinner fa-spin'></i> Uploading to Website...";
+
+            let imageUrls = document.getElementById("admImages").value.split(",").map(url => url.trim()).filter(url => url !== "");
+            if (imageUrls.length === 0 && STAGED_FILES_PERMANENT.length > 0) {
+                imageUrls = STAGED_FILES_PERMANENT;
+            }
+
+            if (imageUrls.length === 0) {
+                alert("Please upload a ZIP file or provide Image URLs!");
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = "➕ Add Product To Website";
+                return;
+            }
+
+            const productData = {
+                title: document.getElementById("admTitle").value.trim(),
+                category: document.getElementById("admCategory").value,
+                price: document.getElementById("admPrice").value.trim(),
+                oldPrice: document.getElementById("admOldPrice").value.trim(),
+                discount: document.getElementById("admDiscount").value.trim(),
+                images: imageUrls,
+                description: document.getElementById("admDesc").value.trim(),
+                overview: document.getElementById("admOverview").value.trim(),
+                timestamp: Date.now()
+            };
+
+            try {
+                await addDoc(productsRef, productData);
+                alert("Product live ho chuka hai permanent images ke sath!");
+                document.getElementById("adminForm").reset();
+                document.getElementById("zipStatusBox").style.display = "none";
+                STAGED_FILES_PERMANENT = [];
+            } catch (error) {
+                console.error(error);
+                alert("Error: " + error.message);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = "➕ Add Product To Website";
+            }
+        });
+
+        // Realtime Data Loading for Deletion Panel
+        onSnapshot(productsRef, (snapshot) => {
+            const listContainer = document.getElementById("deleteListContainer");
+            listContainer.innerHTML = "";
+            
+            if(snapshot.empty) {
+                listContainer.innerHTML = "<p style='color: #94a3b8; text-align:center;'>No products found.</p>";
+                return;
+            }
+
+            snapshot.forEach((docSnap) => {
+                const product = docSnap.data();
+                const id = docSnap.id;
+
+                const itemRow = document.createElement("div");
+                itemRow.className = "product-delete-row";
+                itemRow.innerHTML = `
+                    <div style="display:flex; align-items:center; gap:12px; max-width:80%;">
+                        <img src="${product.images && product.images[0] ? product.images[0] : ''}" style="width:40px; height:40px; object-fit:cover; border-radius:6px; background:#f1f5f9;">
+                        <span style="font-size:14px; font-weight:600; color:#1e293b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${product.title}</span>
+                    </div>
+                    <button class="delete-btn" data-id="${id}"><i class="fa-solid fa-trash"></i> Delete</button>
+                `;
+                listContainer.appendChild(itemRow);
+            });
+
+            document.querySelectorAll(".delete-btn").forEach(btn => {
+                btn.onclick = async (e) => {
+                    const docId = e.target.getAttribute("data-id") || e.target.closest('.delete-btn').getAttribute("data-id");
+                    if(confirm("Kya aap waqai is product ko website se remove karna chahte hain?")) {
+                        await deleteDoc(doc(db, "products", docId));
+                        alert("Product Removed!");
+                    }
+                };
+            });
+        });
+    </script>
     
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #0f172a; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        
-        .admin-card { 
-            background-color: #ffffff; 
-            width: 100%; 
-            max-width: 650px; 
-            border-radius: 20px; 
-            padding: 30px; 
-            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-            max-height: 90vh;
-            overflow-y: auto;
-        }
+        body { background-color: #0f172a; padding: 40px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 20px;}
+        .admin-card { background-color: #ffffff; width: 100%; max-width: 650px; border-radius: 20px; padding: 30px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
         .admin-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid #f1f5f9; padding-bottom: 14px; }
         .admin-input-group { margin-bottom: 16px; }
         .admin-input-group label { display: block; font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .admin-input-group input, .admin-input-group select, .admin-input-group textarea { width: 100%; padding: 12px; border: 1.5px solid #cbd5e1; border-radius: 10px; outline: none; font-size: 14px; transition: all 0.2s; }
+        .admin-input-group input, .admin-input-group select, .admin-input-group textarea { width: 100%; padding: 12px; border: 1.5px solid #cbd5e1; border-radius: 10px; outline: none; font-size: 14px; }
         .admin-input-group input:focus, .admin-input-group select:focus, .admin-input-group textarea:focus { border-color: #ff4e00; box-shadow: 0 0 0 4px rgba(255, 78, 0, 0.1); }
-        
         .form-split-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-        .admin-input-group input[type="file"] { background: #f8fafc; padding: 10px; cursor: pointer; }
-        
-        .admin-btn-row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 15px; }
         .admin-action-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #ff6a00 0%, #ff4e00 100%); color: #ffffff; border: none; font-weight: 700; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
-        .admin-action-btn:disabled { background: #cbd5e1; color: #94a3b8; cursor: not-allowed; }
-        .admin-reset-btn { width: 100%; padding: 14px; background: #64748b; color: #ffffff; border: none; font-weight: 600; border-radius: 10px; cursor: pointer; font-size: 14px; }
-        
-        .export-status-lbl { font-size: 14px; font-weight: 700; color: #0f172a; margin-top: 24px; display: none; text-transform: uppercase; }
-        .code-export-box {
-            margin-top: 8px;
-            background: #1e293b;
-            color: #38bdf8;
-            padding: 16px;
-            border-radius: 10px;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 12px;
-            max-height: 250px;
-            overflow-y: auto;
-            display: none;
-            white-space: pre-wrap;
-            user-select: all;
-            border: 1px solid #334155;
-        }
-        .zip-status-badge { font-size: 12px; font-weight: 700; color: #16a34a; background: #f0fdf4; padding: 6px 12px; border-radius: 6px; display: inline-block; margin-top: 6px; border: 1px solid #bbf7d0; }
+        .status-box { padding: 12px; border-radius: 10px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+        .status-box.info { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+        .status-box.success { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+        .status-box.error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .product-delete-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 10px; }
+        .delete-btn { background: #ef4444; color: white; border:none; padding:6px 12px; border-radius:6px; font-weight:600; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px;}
     </style>
 </head>
 <body>
 
     <div class="admin-card">
         <div class="admin-header-row">
-            <h2 style="color: #0f172a; font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; color: #ff4e00;"><i class="fa-solid fa-user-gear"></i> Hamviro Bulk Studio</h2>
-            <span style="font-size: 12px; color: #64748b; font-weight: 600;">Secure Workspace</span>
+            <h2 style="font-family:'Plus Jakarta Sans'; font-weight:800; color:#0f172a; font-size:22px;">🚀 Hamviro Admin (Firebase + ImgBB ZIP)</h2>
+            <span style="background:#fff4ee; color:#ff4e00; padding:4px 10px; border-radius:20px; font-size:11px; font-weight:700;">LIVE Connected</span>
         </div>
-        
-        <form id="adminProductForm" onsubmit="handleAdminAddProduct(event)">
-            <div class="admin-input-group"><label>Product Title</label><input type="text" id="admTitle" required></div>
-            
+
+        <form id="adminForm">
+            <div class="admin-input-group">
+                <label>Product Title</label>
+                <input type="text" id="admTitle" placeholder="Premium Leather Smart Wallet" required>
+            </div>
+
             <div class="form-split-row">
                 <div class="admin-input-group">
-                    <label>Category</label>
+                    <label>Product Category</label>
                     <select id="admCategory" required>
-                        <option value="mega-offer">MEGA OFFER</option>
-                        <option value="men-fashion">Men's Fashion</option>
-                        <option value="ladies-fashion">Ladies' Fashion</option>
-                        <option value="accessories">Accessories</option>
-                        <option value="beauty">Beauty</option>
-                        <option value="electronic">Electronic Devices</option>
+                        <option value="mega">🔥 Mega Offer</option>
+                        <option value="beauty">Beauty & Cosmetics</option>
+                        <option value="electronics">Electronics & Gadgets</option>
+                        <option value="fashion">Fashion & Apparel</option>
+                        <option value="home">Home & Living</option>
                     </select>
                 </div>
-                <div class="admin-input-group"><label>Price (Rs.)</label><input type="text" id="admPrice" placeholder="e.g. 1,690" required></div>
+                <div class="admin-input-group">
+                    <label>Discount Tag (Optional)</label>
+                    <input type="text" id="admDiscount" placeholder="-35%">
+                </div>
             </div>
-            
+
             <div class="form-split-row">
-                <div class="admin-input-group"><label>Old Price (Rs.)</label><input type="text" id="admOldPrice" placeholder="e.g. 3,000" required></div>
-                <div class="admin-input-group"><label>Discount Tag</label><input type="text" id="admDiscount" placeholder="e.g. -48%" required></div>
+                <div class="admin-input-group">
+                    <label>Selling Price (Rs.)</label>
+                    <input type="text" id="admPrice" placeholder="1,499" required>
+                </div>
+                <div class="admin-input-group">
+                    <label>Old Price (Rs.)</label>
+                    <input type="text" id="admOldPrice" placeholder="2,200">
+                </div>
             </div>
-            
+
             <div class="admin-input-group">
-                <label style="color: #ff4e00; font-weight: 700;"><i class="fa-solid fa-file-zip"></i> Upload Markaz ZIP File</label>
-                <input type="file" id="admImgFileBulk" accept="image/*, .zip" multiple onchange="handleBulkFileSelect(this)">
-                <div id="zipStatusBox" class="zip-status-badge" style="display: none;">Reading ZIP...</div>
+                <label style="color: #ff4e00;">📦 Upload Images ZIP Folder (Automatic ImgBB Upload)</label>
+                <input type="file" id="admImgFileBulk" accept=".zip">
             </div>
             
-            <div class="admin-input-group"><label>Short Description</label><textarea id="admDesc" rows="2"></textarea></div>
-            <div class="admin-input-group"><label>Product Overview</label><textarea id="admOverview" rows="4" placeholder="• Fabric: Fleece&#10;• Sizes: S, M, L" required></textarea></div>
-            
-            <div class="admin-btn-row">
-                <button type="submit" class="admin-action-btn" id="submitBtn">➕ Add & Generate Code</button>
-                <button type="button" class="admin-reset-btn" onclick="if(confirm('Clear data?')){ bulkCount=0; totalAccumulatedCode=''; document.getElementById('exportStatusLbl').style.display='none'; document.getElementById('codeExportBox').style.display='none'; }">❌ Reset List</button>
+            <div id="zipStatusBox" class="status-box" style="display: none;"></div>
+
+            <div class="admin-input-group">
+                <label>Or Image URLs (Alternative)</label>
+                <input type="text" id="admImages" placeholder="https://link1.com/img.jpg">
             </div>
+
+            <div class="admin-input-group">
+                <label>Short Description</label>
+                <textarea id="admDesc" rows="3" required></textarea>
+            </div>
+
+            <div class="admin-input-group">
+                <label>Product Overview (New line point-wise)</label>
+                <textarea id="admOverview" rows="4" placeholder="Material: PU Leather" required></textarea>
+            </div>
+
+            <button type="submit" class="admin-action-btn" id="submitBtn">➕ Add Product To Website</button>
         </form>
-        
-        <div class="export-status-lbl" id="exportStatusLbl">0 Products Ready To Copy (Sab Ek Saath):</div>
-        <div class="code-export-box" id="codeExportBox"></div>
     </div>
 
-    <script>
-        const IMGBB_API_KEY = "0f2c24943fd85d909c8a69d86a427f3c"; 
-        let bulkCount = 0; let totalAccumulatedCode = ""; let STAGED_FILES = [];
+    <div class="admin-card" style="max-height: 400px; overflow-y: auto;">
+        <div class="admin-header-row" style="margin-bottom: 14px; padding-bottom: 8px;">
+            <h3 style="font-family:'Plus Jakarta Sans'; font-weight:700; color:#0f172a; font-size:18px;">🗑️ Delete Products</h3>
+        </div>
+        <div id="deleteListContainer"></div>
+    </div>
 
-        async function handleBulkFileSelect(input) {
-            const statusBox = document.getElementById("zipStatusBox");
-            statusBox.style.display = "none"; STAGED_FILES = [];
-            if (!input.files || input.files.length === 0) return;
-
-            const firstFile = input.files[0];
-            if (firstFile.name.endsWith(".zip") || firstFile.type === "application/zip" || firstFile.type === "application/x-zip-compressed") {
-                statusBox.style.display = "inline-block";
-                statusBox.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Extracting Markaz ZIP...`;
-                try {
-                    const zip = await JSZip.loadAsync(firstFile); const imagePromises = [];
-                    zip.forEach((relativePath, zipEntry) => {
-                        if (!zipEntry.dir && /\.(jfif|webp|jpg|jpeg|png)$/i.test(zipEntry.name) && !zipEntry.name.startsWith('__MACOSX')) {
-                            const promise = zipEntry.async("blob").then(blob => {
-                                return new File([blob], zipEntry.name, { type: blob.type || "image/jpeg" });
-                            });
-                            imagePromises.push(promise);
-                        }
-                    });
-                    STAGED_FILES = await Promise.all(imagePromises);
-                    if (STAGED_FILES.length > 0) {
-                        statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${STAGED_FILES.length} Images Found inside ZIP!`;
-                    } else { statusBox.innerHTML = `<i class="fa-solid fa-circle-xmark" style="color:red;"></i> No valid images in ZIP!`; }
-                } catch (err) { statusBox.innerHTML = `<i class="fa-solid fa-circle-xmark" style="color:red;"></i> Error parsing ZIP file.`; }
-            } else {
-                for (let i = 0; i < input.files.length; i++) { STAGED_FILES.push(input.files[i]); }
-                statusBox.style.display = "inline-block"; statusBox.innerHTML = `<i class="fa-solid fa-images"></i> ${STAGED_FILES.length} Images Selected.`;
-            }
-        }
-
-        async function uploadFileObjectToImgBB(fileObj) {
-            if (!fileObj) return null;
-            const formData = new FormData(); formData.append("image", fileObj);
-            try {
-                const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: "POST", body: formData });
-                const resData = await response.json();
-                if (resData.success) return resData.data.url;
-                return null;
-            } catch (err) { return null; }
-        }
-
-        async function handleAdminAddProduct(e) {
-            e.preventDefault(); const submitBtn = document.getElementById("submitBtn");
-            if (STAGED_FILES.length === 0) { alert("Pehle ZIP file select karein!"); return; }
-
-            submitBtn.disabled = true;
-            const imgs = [];
-            for (let i = 0; i < STAGED_FILES.length; i++) {
-                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Uploading (${i + 1}/${STAGED_FILES.length})...`;
-                const url = await uploadFileObjectToImgBB(STAGED_FILES[i]);
-                if (url) imgs.push(url);
-            }
-
-            if (imgs.length === 0) { alert("Images upload failed."); submitBtn.disabled = false; return; }
-
-            const cleanOverview = document.getElementById("admOverview").value.trim().replace(/"/g, '\\"').replace(/\n/g, '\\n');
-            const cleanDesc = document.getElementById("admDesc").value.trim().replace(/"/g, '\\"').replace(/\n/g, '\\n');
-            const cleanTitle = document.getElementById("admTitle").value.trim().replace(/"/g, '\\"');
-
-            totalAccumulatedCode += `            {\n` +
-                `                title: "${cleanTitle}",\n` +
-                `                category: "${document.getElementById("admCategory").value}",\n` +
-                `                price: "${document.getElementById("admPrice").value.trim()}",\n` +
-                `                oldPrice: "${document.getElementById("admOldPrice").value.trim()}",\n` +
-                `                discount: "${document.getElementById("admDiscount").value.trim()}",\n` +
-                `                images: ${JSON.stringify(imgs)},\n` +
-                `                description: "${cleanDesc}",\n` +
-                `                overview: "${cleanOverview}"\n` +
-                `            },\n`;
-
-            bulkCount++;
-            const lbl = document.getElementById("exportStatusLbl"); const box = document.getElementById("codeExportBox");
-            lbl.innerText = `🔥 ${bulkCount} Products Ready to Copy (Sab Ek Saath):`; box.innerText = totalAccumulatedCode;
-            lbl.style.display = "block"; box.style.display = "block";
-
-            // Form Fields Reset
-            document.getElementById("admTitle").value = ""; document.getElementById("admPrice").value = ""; document.getElementById("admOldPrice").value = ""; document.getElementById("admDiscount").value = ""; document.getElementById("admImgFileBulk").value = ""; document.getElementById("admDesc").value = ""; document.getElementById("admOverview").value = "";
-            document.getElementById("zipStatusBox").style.display = "none"; STAGED_FILES = [];
-            submitBtn.disabled = false; submitBtn.innerHTML = "➕ Add & Generate Code";
-
-            document.querySelector(".admin-card").scrollTo({ top: document.querySelector(".admin-card").scrollHeight, behavior: 'smooth' });
-            alert("Product processed perfectly straight from ZIP folder!");
-        }
-    </script>
 </body>
 </html>
